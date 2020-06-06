@@ -40,6 +40,7 @@ dt1 <- dt %>%
                !is.na(Value),
                Year >= 2015)
 
+
 # countries: valid countries
 countries <- unique(dt1$Country_Name)
 countries1 <- countries[23:length(countries)]
@@ -63,121 +64,111 @@ dt3 <- dt2 %>%
 dt4 <- dt3[complete.cases(dt3), ] %>%
         filter(Year == "2016")
 
+
+dt5 <- dt4
+
+
 #################################### Modeling ##################################
 
 
-# PCA analysis for data inspection
-pca_mtx <- as.matrix(dt4[, 4:6])
-rownames(pca_mtx) <- dt4$Country_Name
-
-pca_dt <- prcomp(x = pca_mtx, 
-                 scale = TRUE, center = TRUE)
-
-
-
-# train/test split 
-
-set.seed(10)
-dt4_train <- sample_n(dt4, 
-                      size = nrow(dt4) * 0.75)
-
-dt4_test <- dt4 %>%
-        anti_join(dt4_train, by = "Country_Code")
-
-dt4_glimpse <- gather(dt4, 
-                      GDP_Category,
-                      GDP_Value, 
-                      -!c("GDP_per_Capita",
-                          "Total_GDP"))
-
-
-
-# modeling 
+# fm: formula
 fm_single <- as.formula(Percent_Education_Expenditure ~ 
                                 log(GDP_per_Capita))
 fm_double <- as.formula(Percent_Education_Expenditure ~ 
                                 log(GDP_per_Capita) + 
                                 log(GDP_per_Capita):log(Total_GDP))
 
-model_single <- lm(fm_single, 
-                   data = dt4_train)
-model_double <- lm(fm_double,
-                   data = dt4_train)
+# Cross-validation 
+library(vtreat)
 
-dt4_train1 <- dt4_train %>%
-        mutate(pred_single = predict(model_single), 
-               pred_double = predict(model_double)) %>%
-        mutate(resid_single = pred_single - Percent_Education_Expenditure,
-               resid_double = pred_double - Percent_Education_Expenditure)
+set.seed(70)
+splitPlan <- kWayCrossValidation(nrow(dt5), 3, NULL, NULL)
 
-# testing
+dt5$pred_cv_single <- 0 
+dt5$pred_cv_double <- 0
 
-dt4_test1 <- dt4_test %>%
-        mutate(pred_single = predict(model_single, 
-                                     newdata = dt4_test),
-               pred_double = predict(model_double,
-                                     newdata = dt4_test))%>%
-        mutate(resid_single = pred_single - Percent_Education_Expenditure,
-               resid_double = pred_double - Percent_Education_Expenditure)
+
+for(i in 1:3) {
+        split <- splitPlan[[i]]
+        model <- lm(fm_single, 
+                    data = dt5[split$train,])
+        dt5$pred_cv_single[split$app] <- predict(model, 
+                                                 newdata = dt5[split$app,])
+}
+
+for(i in 1:3) {
+        split <- splitPlan[[i]]
+        model <- lm(fm_double, 
+                    data = dt5[split$train,])
+        dt5$pred_cv_double[split$app] <- predict(model, 
+                                                 newdata = dt5[split$app,])
+}
+
+
+
+# Calculating residual 
+dt5 <- dt5 %>% 
+        mutate(resid_cv_single = pred_cv_single - Percent_Education_Expenditure,
+               resid_cv_double = pred_cv_double - Percent_Education_Expenditure)
+                               
+
+
 
 # evaluation 
 
-RMSE_single <- sqrt(mean(dt4_test1$resid_single^2))
-RMSE_double <- sqrt(mean(dt4_test1$resid_double^2))
-sd <- sd(dt4_test1$Percent_Education_Expenditure)
-r_squared_single <- (cor(dt4_test1$Percent_Education_Expenditure, 
-                         dt4_test1$pred_single))^2
-r_squared_double <- (cor(dt4_test1$Percent_Education_Expenditure, 
-                         dt4_test1$pred_double))^2
+RMSE_cv_single <- sqrt(mean(dt5$resid_cv_single^2))
+RMSE_cv_double <- sqrt(mean(dt5$resid_cv_double^2))
+sd_cv <- sd(dt5$Percent_Education_Expenditure)
+r_squared_cv_single <- (cor(dt5$Percent_Education_Expenditure, 
+                            dt5$pred_cv_single))^2
+r_squared_cv_double <- (cor(dt5$Percent_Education_Expenditure, 
+                            dt5$pred_cv_double))^2
 
+# Combining evaluation results 
+eval <- data.frame(Model = c("Additive",
+                               "Interactive",
+                               "Additive",
+                               "Interactive"),
+                   Training_And_Testing = c("75-25% Spliting",
+                                            "75-25% Spliting",
+                                            "Cross-Validation",
+                                            "Cross-Validation"),
+                   RMSE = c(RMSE_single, 
+                            RMSE_double,
+                            RMSE_cv_single,
+                            RMSE_cv_double),
+                   R_squared = c(r_squared_single,
+                                 r_squared_double,
+                                 r_squared_cv_single,
+                                 r_squared_cv_double),
+                   Standard_Deviation = c(sd, 
+                                          sd,
+                                          sd_cv,
+                                          sd_cv))
+                   
 
+#################################### Plotting #################################
 
-
-
-################################ Plotting ####################################
-
-
-# PCA biplot
-biplot_dt <- biplot(pca_dt, main = "PCA Analysis")
-
-
-glimpse_plot <- 
-        ggplot(dt4_glimpse, aes(x = GDP_Value,
-                                y = Percent_Education_Expenditure,
-                                color = GDP_Category)) + 
-        geom_point(alpha = 0.5, 
-                   size = 2) + 
-        geom_smooth(method = "lm") + 
-        scale_x_log10() + 
-        theme_bw() + 
-        ylab("Government Dxpenditure on Education, Total (% of GDP)") + 
-        xlab("GDP (US dollars)") +
-        ggtitle("Relationship between Education Expenditure and GDP")
-
-
-
-# evaluation plots
-
-outcome_vs_pred_single_plot <- 
-        ggplot(dt4_train1, 
-               aes(x = pred_single, 
+outcome_vs_pred_cv_single_plot <- 
+        ggplot(dt5, 
+               aes(x = pred_cv_single, 
                    y = Percent_Education_Expenditure)) + 
         geom_point(alpha = 0.5,
                    size = 2,
-                   color = "#996600") + 
+                   color = "#CC0099") + 
         geom_smooth(method = "lm", se = FALSE) + 
         theme_bw() + 
         xlab("Percent Education Expenditure (Predicted)") +
         ylab("Percent Education Expenditure (Actual)") + 
         ggtitle("Outcome vs Prediction: Additive Model")
 
-outcome_vs_pred_double_plot <- 
-        ggplot(dt4_train1, 
-               aes(x = pred_double, 
+outcome_vs_pred_cv_double_plot <- 
+        ggplot(dt5, 
+               aes(x = pred_cv_double, 
                    y = Percent_Education_Expenditure)) + 
         geom_point(alpha = 0.5,
                    size = 2,
-                   color = "#993300") + 
+                   color = "#660066") + 
         geom_smooth(method = "lm", se = FALSE) + 
         theme_bw() + 
         xlab("Percent Education Expenditure (Predicted)") +
@@ -186,15 +177,16 @@ outcome_vs_pred_double_plot <-
 
 
 
+
 # residual plots
 
-residual_single_plot<-
-        ggplot(dt4_train1,
-               aes(x = pred_single,
-                   y = resid_single)) +
+residual_cv_single_plot<-
+        ggplot(dt5,
+               aes(x = pred_cv_single,
+                   y = resid_cv_single)) +
         geom_point(alpha = 0.5, 
                    size = 2,
-                   color = "#996600") + 
+                   color = "#CC0099") + 
         geom_smooth(method = "lm", 
                     se = FALSE) + 
         theme_bw() + 
@@ -202,13 +194,13 @@ residual_single_plot<-
         ylab("Residual") + 
         ggtitle("Residual over Predicted Percent Education Expenditure: Additive Model")
 
-residual_double_plot<-
-        ggplot(dt4_train1,
-               aes(x = pred_double,
-                   y = resid_double)) +
+residual_cv_double_plot<-
+        ggplot(dt5,
+               aes(x = pred_cv_double,
+                   y = resid_cv_double)) +
         geom_point(alpha = 0.5, 
                    size = 2,
-                   color = "#993300") + 
+                   color = "#660066") + 
         geom_smooth(method = "lm", 
                     se = FALSE) + 
         theme_bw() + 
@@ -216,45 +208,22 @@ residual_double_plot<-
         ylab("Residual") + 
         ggtitle("Residual over Predicted Percent Education Expenditure: Interactive Model")
 
-
 # gain curves 
 
 library(WVPlots)
 
-gain_curve_single <- GainCurvePlot(dt4_train1,
-                                   "pred_single",
+gain_curve_cv_single <- GainCurvePlot(dt5,
+                                   "pred_cv_single",
                                    "Percent_Education_Expenditure", 
                                    "Gain Curve: Additive Model") + 
         theme_bw() + 
         xlab("Fraction Itens in Sort Order") + 
         ylab("Fraction Total Sum: Percent Education Expenditure")
 
-gain_curve_double <- GainCurvePlot(dt4_train1,
-                                   "pred_double",
+gain_curve_cv_double <- GainCurvePlot(dt5,
+                                   "pred_cv_double",
                                    "Percent_Education_Expenditure", 
                                    "Gain Curve: Interactive Model") + 
         theme_bw() + 
         xlab("Fraction Itens in Sort Order") + 
         ylab("Fraction Total Sum: Percent Education Expenditure")
-
-# test plots
-test_single_plot <-
-        ggplot(dt4_test1, 
-               aes(x = pred_single,
-                   y = Percent_Education_Expenditure)) +
-        geom_point(alpha = 0.5, 
-                   size = 2,
-                   color = "#996600") +
-        geom_smooth(method = "lm") +
-        theme_bw()
-
-
-test_double_plot <-
-        ggplot(dt4_test1, 
-               aes(x = pred_double,
-                   y = Percent_Education_Expenditure)) +
-        geom_point(alpha = 0.5, 
-                   size = 2,
-                   color = "#993300") +
-        geom_smooth(method = "lm") +
-        theme_bw()
