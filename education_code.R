@@ -60,5 +60,68 @@ dt3 <- dt2 %>%
         select(-Indicator_Name, -Indicator_Code) %>% 
         spread(Indicator, Value)
 
-dt4 <- dt3[complete.cases(dt3), ] 
+dt4 <- dt3[complete.cases(dt3), ] %>%
+        filter(Year == "2016")
+
+
+# PCA analysis
+pca_mtx <- as.matrix(dt4[, 4:6])
+rownames(pca_mtx) <- dt4$Country_Name
+
+pca_dt <- prcomp(x = pca_mtx, 
+                 scale = TRUE, center = TRUE)
+
+
+
+# train/test split 
+
+set.seed(123)
+dt4_train <- sample_n(dt4, 
+                      size = nrow(dt4) * 0.75)
+
+dt4_test <- dt4 %>%
+        anti_join(dt4_train, by = "Country_Code")
+
+dt4_glimpse <- gather(dt4, 
+                      GDP_Category,
+                      GDP_Value, 
+                      -!c("GDP_per_Capita",
+                          "Total_GDP"))
+
+
+
+# modeling 
+fm_single <- as.formula(Percent_Education_Expenditure ~ GDP_per_Capita)
+fm_double <- as.formula(Percent_Education_Expenditure ~ GDP_per_Capita + GDP_per_Capita:Total_GDP)
+
+model_single <- lm(fm_single, 
+                   data = dt4_train)
+model_double <- lm(fm_double,
+                   data = dt4_train)
+
+
+
+
+
+################################ Plotting ####################################
+
+
+# PCA biplot
+biplot_dt <- biplot(pca_dt, main = "PCA Analysis")
+
+
+glimpse_plot <- 
+        ggplot(dt4_glimpse, aes(x = GDP_Value,
+                                y = Percent_Education_Expenditure,
+                                color = GDP_Category)) + 
+        geom_point() + 
+        geom_smooth(method = "lm") + 
+        scale_x_log10() + 
+        theme_bw() + 
+        ylab("Government Dxpenditure on Education, Total (% of GDP)") + 
+        xlab("GDP (US dollars)") +
+        ggtitle("Relationship between Education Expenditure and GDP")
+
+
+
 
